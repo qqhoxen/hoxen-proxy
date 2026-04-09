@@ -4,15 +4,14 @@ use std::net::TcpListener;
 use std::net::TcpStream;
 use std::thread;
 
-fn write_varint(value: u16) -> Vec<u8> {
+fn write_varint(mut value: u16) -> Vec<u8> {
     let mut result: Vec<u8> = Vec::new();
-    let mut val = value as u16;
     loop {
-        let mut byte = (val & 0x7F) as u8;
-        val = val >> 7;
-        if val != 0 { byte = byte | 0x80; }
+        let mut byte = (value & 0x7F) as u8;
+        value = value >> 7;
+        if value != 0 { byte = byte | 0x80; }
         result.push(byte);
-        if val == 0 { break; }
+        if value == 0 { break; }
     }
     result
 }
@@ -75,8 +74,6 @@ fn build_pong_response(payload: i64) -> Vec<u8> {
 }
 
 fn handle_client(mut client_stream: TcpStream, custom_fake: Option<String>) {
-    let client_addr = client_stream.peer_addr().unwrap();
-
     let packet_length = read_varint(&mut client_stream);
     if packet_length.is_none() { return; }
 
@@ -114,7 +111,8 @@ fn handle_client(mut client_stream: TcpStream, custom_fake: Option<String>) {
     if client_stream.write_all(&pong).is_err() { return; }
 }
 
-pub fn run(bind: &str, data: Option<String>) {
+pub fn run(bind: &str, data: Option<&str>) {
+    let data: Option<String> = data.map(|s| s.to_string());
     let listener = TcpListener::bind(bind).unwrap();
     for incoming in listener.incoming() {
         let client_stream = incoming.unwrap();
