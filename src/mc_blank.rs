@@ -3,6 +3,7 @@ use std::io::Write;
 use std::net::TcpListener;
 use std::net::TcpStream;
 use std::thread;
+use tracing::{error, info, warn};
 
 fn write_varint(mut value: u16) -> Vec<u8> {
     let mut result: Vec<u8> = Vec::new();
@@ -74,6 +75,9 @@ fn build_pong_response(payload: i64) -> Vec<u8> {
 }
 
 fn handle_client(mut client_stream: TcpStream, custom_fake: Option<String>) {
+    let client_addr = client_stream.peer_addr().ok();
+    info!(client_addr = ?client_addr, "accepted mc status connection");
+
     let packet_length = read_varint(&mut client_stream);
     if packet_length.is_none() { return; }
 
@@ -88,7 +92,10 @@ fn handle_client(mut client_stream: TcpStream, custom_fake: Option<String>) {
 
     let fake = custom_fake.unwrap_or_else(|| r#"{"description":"A Minecraft Server","players":{"max":20,"online":0},"version":{"name":"Hoxen v1","protocol":774}}"#.to_string());
     let response = build_status_response(fake);
-    if client_stream.write_all(&response).is_err() { return; }
+    if let Err(error) = client_stream.write_all(&response) {
+        warn!(client_addr = ?client_addr, %error, "failed to write mc status response");
+        return;
+    }
 
     let ping_length = read_varint(&mut client_stream);
     if ping_length.is_none() { return; }
@@ -108,14 +115,26 @@ fn handle_client(mut client_stream: TcpStream, custom_fake: Option<String>) {
     let original_timestamp = i64::from_be_bytes(original_timestamp_bytes);
 
     let pong = build_pong_response(original_timestamp);
-    if client_stream.write_all(&pong).is_err() { return; }
+    if let Err(error) = client_stream.write_all(&pong) {
+        warn!(client_addr = ?client_addr, %error, "failed to write mc pong response");
+        return;
+    }
+
+    info!(client_addr = ?client_addr, "mc status session finished");
 }
 
 pub fn run(bind: &str, data: Option<&str>) {
     let data: Option<String> = data.map(|s| s.to_string());
+    info!(bind, has_custom_data = data.is_some(), "starting mc blank listener");
     let listener = TcpListener::bind(bind).unwrap();
     for incoming in listener.incoming() {
-        let client_stream = incoming.unwrap();
+        let client_stream = match incoming {
+            Ok(client_stream) => client_stream,
+            Err(error) => {
+                error!(bind, %error, "failed to accept mc connection");
+                continue;
+            }
+        };
         let data_clone = data.clone();
         thread::spawn(move || { handle_client(client_stream, data_clone); });
     }

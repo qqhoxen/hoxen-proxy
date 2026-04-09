@@ -2,8 +2,10 @@ use std::net::UdpSocket;
 use std::net::SocketAddr;
 use std::collections::HashMap;
 use std::time::Instant;
+use tracing::{error, info, warn};
 
 pub fn run(bind: &str, target: &str) {
+    info!(bind, target, "starting udp proxy listener");
     let proxy_socket = UdpSocket::bind(bind).unwrap();
     let mut clients: HashMap<SocketAddr, (UdpSocket, Instant)> = HashMap::new();
     let mut reverse_map: HashMap<SocketAddr, SocketAddr> = HashMap::new();
@@ -12,22 +14,38 @@ pub fn run(bind: &str, target: &str) {
     proxy_socket.set_read_timeout(Some(timeout)).unwrap();
     loop {
         let recv_result = proxy_socket.recv_from(&mut buffer);
-        if recv_result.is_ok() {
-            let (bytes_read, client_addr) = recv_result.unwrap();
+        if let Ok((bytes_read, client_addr)) = recv_result {
             let data = &buffer[..bytes_read];
             let has_client = clients.contains_key(&client_addr);
             if !has_client {
                 let client_socket = UdpSocket::bind("0.0.0.0:0").unwrap();
                 client_socket.set_read_timeout(Some(timeout)).unwrap();
-                client_socket.connect(target).unwrap();
+                if let Err(error) = client_socket.connect(target) {
+                    error!(%client_addr, target, %error, "failed to connect udp client socket to target");
+                    continue;
+                }
                 let local_addr = client_socket.local_addr().unwrap();
                 reverse_map.insert(local_addr, client_addr);
                 clients.insert(client_addr, (client_socket, Instant::now()));
+                info!(%client_addr, %local_addr, target, "registered udp client");
             }
             let entry = clients.get_mut(&client_addr).unwrap();
             let client_socket = &entry.0;
             entry.1 = Instant::now();
-            client_socket.send(data).unwrap_or(0);
+            match client_socket.send(data) {
+                Ok(sent) => {
+                    if sent != bytes_read {
+                        warn!(%client_addr, target, sent, bytes_read, "partial udp send to target");
+                    }
+                }
+                Err(error) => {
+                    warn!(%client_addr, target, %error, "failed to forward udp packet to target");
+                }
+            }
+        } else if let Err(error) = recv_result {
+            if error.kind() != std::io::ErrorKind::WouldBlock && error.kind() != std::io::ErrorKind::TimedOut {
+                warn!(bind, %error, "udp listener recv failed");
+            }
         }
 
         let client_addrs: Vec<SocketAddr> = clients.keys().cloned().collect();
@@ -36,10 +54,15 @@ pub fn run(bind: &str, target: &str) {
             if entry.is_none() { continue; }
             let client_socket = &entry.unwrap().0;
             let recv_result = client_socket.recv(&mut buffer);
-            if recv_result.is_ok() {
-                let bytes_read = recv_result.unwrap();
+            if let Ok(bytes_read) = recv_result {
                 let data = &buffer[..bytes_read];
-                proxy_socket.send_to(data, client_addr).unwrap_or(0);
+                if let Err(error) = proxy_socket.send_to(data, client_addr) {
+                    warn!(%client_addr, %error, "failed to send udp packet back to client");
+                }
+            } else if let Err(error) = recv_result {
+                if error.kind() != std::io::ErrorKind::WouldBlock && error.kind() != std::io::ErrorKind::TimedOut {
+                    warn!(%client_addr, %error, "udp target recv failed");
+                }
             }
         }
 
@@ -58,6 +81,7 @@ pub fn run(bind: &str, target: &str) {
             if entry.is_some() {
                 let local_addr = entry.unwrap().0.local_addr().unwrap();
                 reverse_map.remove(&local_addr);
+                info!(client_addr = %addr, %local_addr, "removing inactive udp client");
             }
             clients.remove(&addr);
         }

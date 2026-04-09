@@ -1,6 +1,8 @@
 use std::collections::HashMap;
 use std::env;
 use std::thread;
+use tracing::Level;
+use tracing_subscriber::FmtSubscriber;
 
 mod mc_blank;
 mod tcp_proxy;
@@ -133,8 +135,14 @@ fn run_parallel(tasks: Vec<Box<dyn FnOnce() + Send>>) {
 }
 
 fn main() {
+    let subscriber = FmtSubscriber::builder()
+        .with_max_level(Level::INFO)
+        .finish();
+    tracing::subscriber::set_global_default(subscriber).unwrap();
+
     let args = parse_args();
     let proxy_type = required(&args, "type");
+    tracing::info!(proxy_type, ?args, "starting proxy");
     match proxy_type {
         "tcp" => {
             let bind = required(&args, "bind");
