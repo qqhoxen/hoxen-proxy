@@ -4,8 +4,8 @@ use std::collections::HashMap;
 use std::time::Instant;
 use tracing::{error, info, warn};
 
-pub fn run(bind: &str, target: &str) {
-    info!(bind, target, "starting udp proxy listener");
+pub fn run(bind: &str, target: &str, timeout_seconds: Option<u64>) {
+    info!(bind, target, ?timeout_seconds, "starting udp proxy listener");
     let proxy_socket = UdpSocket::bind(bind).unwrap();
     let mut clients: HashMap<SocketAddr, (UdpSocket, Instant)> = HashMap::new();
     let mut reverse_map: HashMap<SocketAddr, SocketAddr> = HashMap::new();
@@ -66,13 +66,14 @@ pub fn run(bind: &str, target: &str) {
             }
         }
 
-        let timeout_seconds = 30;
-        let now = Instant::now();
         let mut to_remove: Vec<SocketAddr> = Vec::new();
-        for (addr, (_socket, last_time)) in clients.iter() {
-            let elapsed = now.duration_since(*last_time);
-            if elapsed.as_secs() > timeout_seconds {
-                to_remove.push(*addr);
+        if let Some(timeout_seconds) = timeout_seconds {
+            let now = Instant::now();
+            for (addr, (_socket, last_time)) in clients.iter() {
+                let elapsed = now.duration_since(*last_time);
+                if elapsed.as_secs() > timeout_seconds {
+                    to_remove.push(*addr);
+                }
             }
         }
 

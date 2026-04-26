@@ -158,11 +158,20 @@ fn main() {
         "udp" => {
             let bind = required(&args, "bind");
             let target = required(&args, "target");
+            let udp_timeout = match optional(&args, "udp-timeout") {
+                None => Some(30u64),
+                Some("-1") => None,
+                Some(value) => Some(
+                    value
+                        .parse::<u64>()
+                        .unwrap_or_else(|_| panic!("invalid --udp-timeout: {value}")),
+                ),
+            };
             let pairs = pair_bind_targets(bind, target);
             run_parallel(
                 pairs
                     .into_iter()
-                    .map(|(bind, target)| Box::new(move || udp_proxy::run(&bind, &target)) as Box<dyn FnOnce() + Send>)
+                    .map(|(bind, target)| Box::new(move || udp_proxy::run(&bind, &target, udp_timeout)) as Box<dyn FnOnce() + Send>)
                     .collect(),
             );
         }
